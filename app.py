@@ -151,9 +151,13 @@ def get_firestore_client() -> firestore.Client:
         key_dict,
         scopes=["https://www.googleapis.com/auth/cloud-platform"],
     )
+    # If your Firestore database is NOT named "(default)", add this line
+    # to [gcp_service_account] in secrets.toml:  firestore_database = "your-db-name"
+    db_name = key_dict.get("firestore_database", "(default)")
     return firestore.Client(
         project=key_dict["project_id"],
         credentials=creds,
+        database=db_name,
     )
 
 
@@ -425,105 +429,27 @@ with st.sidebar:
     authenticator.logout(button_name="Sign out", location="sidebar")
     st.markdown("---")
 
-    # ── Track selector ────────────────────────────────────────────────────────
-    st.markdown("### 📁 Tracks")
-    all_tabs = gs_list_sheet_tabs(SHEET_ID)
-
-    if all_tabs:
-        active_tab = st.selectbox(
-            "Active track",
-            options=all_tabs,
-            index=all_tabs.index(st.session_state.active_tab)
-                  if st.session_state.active_tab in all_tabs else 0,
-            key="tab_selector",
-        )
-        st.session_state.active_tab = active_tab
-    else:
-        active_tab = None
-        st.info("No tracks yet — create one below.")
-
-    # ── Rename track ──────────────────────────────────────────────────────────
-    if active_tab:
-        with st.expander("✏️ Rename track"):
-            new_tab_name = st.text_input("New name", value=active_tab, key="rename_tab")
-            if st.button("Rename", key="btn_rename"):
-                if new_tab_name and new_tab_name != active_tab:
-                    if new_tab_name in all_tabs:
-                        st.error("Name already taken.")
-                    else:
-                        gc   = get_gspread_client()
-                        book = gc.open_by_key(SHEET_ID)
-                        ws   = book.worksheet(active_tab)
-                        ws.update_title(new_tab_name)
-                        st.session_state.active_tab = new_tab_name
-                        st.rerun()
-
-    # ── Delete track ──────────────────────────────────────────────────────────
-    if active_tab:
-        with st.expander("🗑️ Delete track"):
-            st.markdown(
-                f"<div style='color:#FF6B6B;font-size:0.82rem;margin-bottom:10px;'>"
-                f"⚠️ Permanently delete <b>{active_tab}</b> and all its rows.<br>"
-                f"This cannot be undone.</div>",
-                unsafe_allow_html=True,
-            )
-            confirmed = st.checkbox(f'Yes, delete "{active_tab}"', key="confirm_del_tab")
-            if st.button("Delete Track", key="btn_del_tab", disabled=not confirmed):
-                gs_delete_worksheet(SHEET_ID, active_tab)
-                remaining = [t for t in all_tabs if t != active_tab]
-                st.session_state.active_tab = remaining[-1] if remaining else None
-                st.rerun()
-
-    st.markdown("---")
-
-    # ── New Track ─────────────────────────────────────────────────────────────
-    st.markdown("### ➕ New Track")
-    new_tab_input = st.text_input("Track name", placeholder="e.g. March 2026", key="new_tab_input")
-    carry_opt     = st.radio(
-        "Starting balance",
-        ["Clear Start ($0)", "Carry Over from current track"],
-        key="carry_opt",
+    # Fetch tabs once so all sections below can use active_tab
+    all_tabs   = gs_list_sheet_tabs(SHEET_ID)
+    active_tab = (
+        st.session_state.active_tab
+        if st.session_state.active_tab in all_tabs
+        else (all_tabs[0] if all_tabs else None)
     )
+    st.session_state.active_tab = active_tab
 
-    if st.button("Create Track", key="btn_create_tab"):
-        if not new_tab_input:
-            st.error("Enter a track name.")
-        elif new_tab_input in all_tabs:
-            st.error("A track with that name already exists.")
-        else:
-            # Create worksheet + header
-            ws = gs_get_or_create_worksheet(SHEET_ID, new_tab_input)
-            # Carry over balance
-            if "Carry Over" in carry_opt and active_tab:
-                df_cur = gs_load_transactions(SHEET_ID, active_tab)
-                s      = compute_summary(df_cur)
-                if s["balance"] > 0:
-                    gs_append_transaction(SHEET_ID, new_tab_input, {
-                        "date":       datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "sheet_name": new_tab_input,
-                        "type":       "Income",
-                        "bucket":     "Income",
-                        "category":   "Initial Balance",
-                        "amount":     round(s["balance"], 2),
-                        "note":       f"Carried over from {active_tab}",
-                    })
-            st.session_state.active_tab = new_tab_input
-            st.rerun()
-
-    st.markdown("---")
-
-    # ── Add Transaction ───────────────────────────────────────────────────────
+    # ── 1. Add Transaction ────────────────────────────────────────────────────
     if active_tab:
         st.markdown("### 💸 Add Transaction")
         tx_type = st.radio("Type", ["Income", "Expense"], horizontal=True, key="tx_type")
 
         if tx_type == "Income":
-            income_cats = ["Salary", "Freelance", "Bonus", "Initial Balance", "Other"]
+            income_cats  = ["Salary", "Freelance", "Bonus", "Initial Balance", "Other"]
             selected_cat = st.selectbox("Category", income_cats, key="tx_cat_income")
             bucket_sel   = "Income"
         else:
-            bucket_sel   = st.selectbox("Bucket", BUCKETS, key="tx_bucket")
-            cat_list     = st.session_state.categories.get(bucket_sel, [])
+            bucket_sel = st.selectbox("Bucket", BUCKETS, key="tx_bucket")
+            cat_list   = st.session_state.categories.get(bucket_sel, [])
             if not cat_list:
                 st.warning("No categories — add one below.")
                 selected_cat = None
@@ -548,10 +474,12 @@ with st.sidebar:
                 st.rerun()
             else:
                 st.error("Fill in all required fields.")
+    else:
+        st.info("Create a track below to start adding transactions.")
 
     st.markdown("---")
 
-    # ── Category Management ───────────────────────────────────────────────────
+    # ── 2. Manage Categories ──────────────────────────────────────────────────
     with st.expander("🏷️ Manage Categories"):
         bucket_edit  = st.selectbox("Bucket", BUCKETS, key="cat_bucket_edit")
         current_cats = st.session_state.categories.get(bucket_edit, [])
@@ -570,6 +498,89 @@ with st.sidebar:
                 st.session_state.categories[bucket_edit].remove(del_cat)
                 save_categories()
                 st.rerun()
+
+    st.markdown("---")
+
+    # ── 3. Track selector + Rename + Delete ───────────────────────────────────
+    st.markdown("### 📁 Tracks")
+
+    if all_tabs:
+        active_tab = st.selectbox(
+            "Active track",
+            options=all_tabs,
+            index=all_tabs.index(st.session_state.active_tab)
+                  if st.session_state.active_tab in all_tabs else 0,
+            key="tab_selector",
+        )
+        st.session_state.active_tab = active_tab
+    else:
+        active_tab = None
+        st.info("No tracks yet — create one below.")
+
+    if active_tab:
+        with st.expander("✏️ Rename track"):
+            new_tab_name = st.text_input("New name", value=active_tab, key="rename_tab")
+            if st.button("Rename", key="btn_rename"):
+                if new_tab_name and new_tab_name != active_tab:
+                    if new_tab_name in all_tabs:
+                        st.error("Name already taken.")
+                    else:
+                        gc   = get_gspread_client()
+                        book = gc.open_by_key(SHEET_ID)
+                        ws   = book.worksheet(active_tab)
+                        ws.update_title(new_tab_name)
+                        st.session_state.active_tab = new_tab_name
+                        st.rerun()
+
+    if active_tab:
+        with st.expander("🗑️ Delete track"):
+            st.markdown(
+                f"<div style='color:#FF6B6B;font-size:0.82rem;margin-bottom:10px;'>"
+                f"⚠️ Permanently delete <b>{active_tab}</b> and all its rows.<br>"
+                f"This cannot be undone.</div>",
+                unsafe_allow_html=True,
+            )
+            confirmed = st.checkbox(f'Yes, delete "{active_tab}"', key="confirm_del_tab")
+            if st.button("Delete Track", key="btn_del_tab", disabled=not confirmed):
+                gs_delete_worksheet(SHEET_ID, active_tab)
+                remaining = [t for t in all_tabs if t != active_tab]
+                st.session_state.active_tab = remaining[-1] if remaining else None
+                st.rerun()
+
+    st.markdown("---")
+
+    # ── 4. New Track ──────────────────────────────────────────────────────────
+    st.markdown("### ➕ New Track")
+    new_tab_input = st.text_input("Track name", placeholder="e.g. March 2026", key="new_tab_input")
+    carry_opt     = st.radio(
+        "Starting balance",
+        ["Clear Start ($0)", "Carry Over from current track"],
+        key="carry_opt",
+    )
+
+    if st.button("Create Track", key="btn_create_tab"):
+        if not new_tab_input:
+            st.error("Enter a track name.")
+        elif new_tab_input in all_tabs:
+            st.error("A track with that name already exists.")
+        else:
+            gs_get_or_create_worksheet(SHEET_ID, new_tab_input)
+            if "Carry Over" in carry_opt and active_tab:
+                df_cur = gs_load_transactions(SHEET_ID, active_tab)
+                s      = compute_summary(df_cur)
+                if s["balance"] > 0:
+                    gs_append_transaction(SHEET_ID, new_tab_input, {
+                        "date":       datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "sheet_name": new_tab_input,
+                        "type":       "Income",
+                        "bucket":     "Income",
+                        "category":   "Initial Balance",
+                        "amount":     round(s["balance"], 2),
+                        "note":       f"Carried over from {active_tab}",
+                    })
+            st.session_state.active_tab = new_tab_input
+            st.rerun()
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -635,6 +646,7 @@ actual_pcts = {b: pct(summ[b.lower()], inc) for b in BUCKETS}
 ideal_pcts  = {b: IDEAL[b] for b in BUCKETS}
 
 bar_colors  = [BUCKET_CLR[b] for b in BUCKETS]
+
 def hex_to_rgba(hex_color: str, alpha: float) -> str:
     """Convert a 6-digit hex color to an rgba() string Plotly accepts."""
     h = hex_color.lstrip("#")
