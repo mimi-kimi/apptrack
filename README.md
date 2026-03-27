@@ -167,3 +167,26 @@ Each tab has this header row (auto-created by the app):
 | `KeyError: 'auth'` | Make sure `secrets.toml` is in the `.streamlit/` folder |
 | `StreamlitAuthenticator` cookie errors | Ensure `cookie_key` is at least 16 characters |
 | Firestore permission denied | Ensure the service account has **Cloud Datastore User** role |
+
+# To add new user
+Step 1 — Generate the bcrypt hash for their password
+Run this once locally in your terminal:
+pythonpython -c "import streamlit_authenticator as stauth; print(stauth.Hasher(['their_password']).generate())"
+Copy the $2b$12$... string it prints.
+
+Step 2 — Add them in Streamlit Cloud Secrets
+Go to share.streamlit.io → your app → ⋮ → Settings → Secrets and add a new block under [auth]:
+toml  [auth.credentials.usernames.newusername]
+  email    = "newuser@example.com"
+  name     = "Their Display Name"
+  password = "$2b$12$..."   # paste hash from Step 1
+Click Save — the app reboots and the new user can log in immediately.
+
+Step 3 — User pastes their Google Sheet ID on first login
+The new user will be prompted to enter their Sheet ID on first login (the app handles this automatically). They just need to:
+
+Create a Google Sheet
+Share it with your service account email as Editor
+Paste the Sheet ID into the promp
+
+Tip: If you're adding users frequently, consider building an admin page inside the app that writes to Firestore and st.secrets via the Streamlit API — but for a small team, the manual secrets approach is the simplest and most secure option.
