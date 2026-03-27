@@ -1,13 +1,12 @@
 # =============================================================================
 #  💰 Money Tracker — Cloud Edition
-#  Auth: streamlit-authenticator (credentials in st.secrets)
+#  No login — Sheet ID pasted once per session identifies the user
 #  User data: Firestore (stores sheet_id per user)
 #  Transactions: Google Sheets via gspread
 #  Charts: Plotly grouped bar (Ideal vs Actual 50/30/20)
 # =============================================================================
 
 import streamlit as st
-import streamlit_authenticator as stauth
 import pandas as pd
 import plotly.graph_objects as go
 import gspread
@@ -97,22 +96,13 @@ h1, h2, h3, h4, .syne             { font-family: 'Syne', sans-serif !important; 
 .stSelectbox > div > div,
 .stTextInput > div > div > input,
 .stNumberInput > div > div > input {
-    background: #111120 !important;
-    border: 1px solid #1e1e30 !important;
+    background: #2a2a3a !important;
+    border: 1px solid #3a3a52 !important;
     border-radius: 9px !important;
-    color: #e8e8f8 !important;
+    color: #ffffff !important;
     font-family: 'DM Mono', monospace !important;
 }
-
-/* ── Login form ── */
-div[data-testid="stForm"] {
-    background: #111120;
-    border: 1px solid #1e1e30;
-    border-radius: 16px;
-    padding: 32px 36px;
-    max-width: 440px;
-    margin: 60px auto 0;
-}
+.stTextInput > div > div > input::placeholder { color: #55556a !important; }
 
 hr { border-color: #1e1e30 !important; }
 </style>
@@ -181,32 +171,18 @@ def get_gspread_client() -> gspread.Client:
 # ═════════════════════════════════════════════════════════════════════════════
 #  FIRESTORE HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
-def fs_get_user_doc(username: str) -> dict | None:
-    """Return the Firestore document for a user, or None if not found."""
+def fs_get_categories(sheet_id: str) -> dict:
+    """Load categories from Firestore keyed by sheet_id, falling back to defaults."""
     db  = get_firestore_client()
-    ref = db.collection("users").document(username)
-    doc = ref.get()
-    return doc.to_dict() if doc.exists else None
-
-
-def fs_upsert_user(username: str, email: str, sheet_id: str) -> None:
-    """Create or update a user document in Firestore."""
-    db  = get_firestore_client()
-    ref = db.collection("users").document(username)
-    ref.set({"email": email, "sheet_id": sheet_id, "updated_at": datetime.utcnow()}, merge=True)
-
-
-def fs_get_categories(username: str) -> dict:
-    """Load per-user custom categories from Firestore, falling back to defaults."""
-    db  = get_firestore_client()
-    ref = db.collection("users").document(username).collection("meta").document("categories")
+    ref = db.collection("sheets").document(sheet_id).collection("meta").document("categories")
     doc = ref.get()
     return doc.to_dict() if doc.exists else dict(DEFAULT_CATEGORIES)
 
 
-def fs_save_categories(username: str, categories: dict) -> None:
+def fs_save_categories(sheet_id: str, categories: dict) -> None:
+    """Save categories to Firestore keyed by sheet_id."""
     db  = get_firestore_client()
-    ref = db.collection("users").document(username).collection("meta").document("categories")
+    ref = db.collection("sheets").document(sheet_id).collection("meta").document("categories")
     ref.set(categories)
 
 
@@ -290,110 +266,50 @@ def pct(value: float, income: float) -> float:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  AUTHENTICATION  (streamlit-authenticator v0.3.x)
+#  SHEET ID GATE  (no login — user pastes their Google Sheet ID once per session)
 # ═════════════════════════════════════════════════════════════════════════════
-# Credentials live in st.secrets under [auth] — see README for format.
-# Example secrets.toml structure:
-#
-# [auth]
-#   cookie_name   = "mt_cookie"
-#   cookie_key    = "some-random-secret-string-32-chars"
-#   cookie_expiry = 30
-#
-#   [auth.credentials.usernames.alice]
-#     email    = "alice@example.com"
-#     name     = "Alice"
-#     password = "$2b$12$..."   # bcrypt hash — generate with stauth.Hasher
-#
-#   [auth.credentials.usernames.bob]
-#     email    = "bob@example.com"
-#     name     = "Bob"
-#     password = "$2b$12$..."
-
-def build_authenticator() -> stauth.Authenticate:
-    cfg = st.secrets["auth"]
-    credentials = {"usernames": {}}
-    for uname, udata in cfg["credentials"]["usernames"].items():
-        credentials["usernames"][uname] = {
-            "email":    udata["email"],
-            "name":     udata["name"],
-            "password": udata["password"],
-        }
-    return stauth.Authenticate(
-        credentials=credentials,
-        cookie_name=cfg["cookie_name"],
-        cookie_key=cfg["cookie_key"],
-        cookie_expiry_days=int(cfg.get("cookie_expiry", 30)),
+if "sheet_id" not in st.session_state:
+    st.markdown(
+        """
+        <div style='text-align:center;margin:60px auto 0;max-width:500px;'>
+            <div style='font-size:3rem;margin-bottom:12px;'>💰</div>
+            <div style='font-family:Syne,sans-serif;font-size:2rem;font-weight:800;
+                        color:#e8e8f8;margin-bottom:8px;'>Money Tracker</div>
+            <div style='color:#55556a;font-size:0.85rem;margin-bottom:32px;'>
+                Paste your Google Sheet ID to load your data.<br>
+                <span style='color:#33334a;font-size:0.75rem;'>
+                Found in your Sheet URL:
+                docs.google.com/spreadsheets/d/<b style='color:#6666c0'>SHEET_ID</b>/edit
+                </span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-
-
-authenticator = build_authenticator()
-
-
-# ── Login gate ────────────────────────────────────────────────────────────────
-# In streamlit-authenticator >= 0.3.x, .login() returns None and writes
-# results into st.session_state:
-#   ["authentication_status"] -> True | False | None
-#   ["username"] -> str | None
-#   ["name"] -> str | None
-authenticator.login(location="main")
-
-auth_status = st.session_state.get("authentication_status")
-username    = st.session_state.get("username")
-name        = st.session_state.get("name")
-
-if auth_status is False:
-    st.error("Incorrect username or password.")
-    st.stop()
-
-if auth_status is None:
-    st.markdown("""
-    <div style='text-align:center;margin-top:40px;'>
-        <div style='font-family:Syne,sans-serif;font-size:2.4rem;font-weight:800;
-                    color:#e8e8f8;margin-bottom:6px;'>💰 Money Tracker</div>
-        <div style='color:#44445a;font-size:0.85rem;'>Sign in to manage your finances.</div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.stop()
-
-# ── Authenticated from here ──────────────────────────────────────────────────
-#    username / name are now guaranteed strings
-
-# ─── Load (or provision) user Firestore doc ──────────────────────────────────
-user_doc = fs_get_user_doc(username)
-
-if user_doc is None or not user_doc.get("sheet_id"):
-    # First-time user: ask them to supply their Google Sheet ID
-    st.markdown(f"""
-    <div style='text-align:center;margin:50px auto;max-width:520px;'>
-        <div style='font-family:Syne,sans-serif;font-size:1.6rem;font-weight:800;color:#e8e8f8;'>
-            👋 Welcome, {name}!
-        </div>
-        <div style='color:#55556a;margin-top:10px;font-size:0.85rem;'>
-            To get started, paste in the <b>Google Sheet ID</b> you want to use
-            for storing your transactions, then click <b>Save</b>.<br><br>
-            The ID is the long string in the Sheet URL:<br>
-            <code>docs.google.com/spreadsheets/d/<b>SHEET_ID</b>/edit</code><br><br>
-            Make sure you have shared the sheet with the service-account email
-            listed in your GCP console as an <b>Editor</b>.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    col_c, col_mid, col_c2 = st.columns([1, 2, 1])
-    with col_mid:
-        sheet_id_input = st.text_input("Google Sheet ID", placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms")
-        if st.button("Save & Continue"):
-            if sheet_id_input.strip():
-                email = st.secrets["auth"]["credentials"]["usernames"][username]["email"]
-                fs_upsert_user(username, email, sheet_id_input.strip())
-                st.success("Saved! Reloading…")
-                st.rerun()
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        sid_input = st.text_input(
+            "Sheet ID",
+            placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74…",
+            label_visibility="collapsed",
+        )
+        if st.button("Open My Sheet →", use_container_width=True):
+            sid = sid_input.strip()
+            if not sid:
+                st.error("Please paste your Sheet ID.")
             else:
-                st.error("Please enter a Sheet ID.")
+                try:
+                    gc = get_gspread_client()
+                    gc.open_by_key(sid)
+                    st.session_state.sheet_id = sid
+                    st.rerun()
+                except gspread.exceptions.SpreadsheetNotFound:
+                    st.error("Sheet not found — make sure the service account is shared as Editor.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
     st.stop()
 
-SHEET_ID = user_doc["sheet_id"]
+SHEET_ID = st.session_state.sheet_id
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -404,11 +320,11 @@ if "active_tab" not in st.session_state:
     st.session_state.active_tab = tabs[0] if tabs else None
 
 if "categories" not in st.session_state:
-    st.session_state.categories = fs_get_categories(username)
+    st.session_state.categories = fs_get_categories(SHEET_ID)
 
 
 def save_categories():
-    fs_save_categories(username, st.session_state.categories)
+    fs_save_categories(SHEET_ID, st.session_state.categories)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -416,17 +332,40 @@ def save_categories():
 # ═════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
 
-    # ── User badge ────────────────────────────────────────────────────────────
-    st.markdown(f"""
-    <div style='padding:10px 0 18px;'>
-        <div style='font-family:Syne,sans-serif;font-size:1.1rem;font-weight:700;color:#e8e8f8;'>
-            {name}
-        </div>
-        <div style='font-size:0.72rem;color:#44445a;'>@{username}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # ── App header ───────────────────────────────────────────────────────────
+    st.markdown(
+        "<div style='padding:10px 0 14px;font-family:Syne,sans-serif;"
+        "font-size:1.2rem;font-weight:800;color:#e8e8f8;'>💰 Money Tracker</div>",
+        unsafe_allow_html=True,
+    )
 
-    authenticator.logout(button_name="Sign out", location="sidebar")
+    # ── Switch / Sign out ─────────────────────────────────────────────────────
+    with st.expander("🔗 Switch Sheet"):
+        st.caption(f"Active: `{SHEET_ID[:28]}…`")
+        new_sid = st.text_input("New Sheet ID", placeholder="Paste Sheet ID", key="switch_sheet_input")
+        if st.button("Switch", key="btn_switch_sheet"):
+            sid = new_sid.strip()
+            if not sid:
+                st.error("Paste a Sheet ID first.")
+            elif sid == SHEET_ID:
+                st.info("Already using that sheet.")
+            else:
+                try:
+                    gc = get_gspread_client()
+                    gc.open_by_key(sid)
+                    st.session_state.sheet_id   = sid
+                    st.session_state.active_tab = None
+                    st.session_state.pop("categories", None)
+                    st.rerun()
+                except gspread.exceptions.SpreadsheetNotFound:
+                    st.error("Sheet not found — check it's shared with the service account.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+        if st.button("Sign out (clear session)", key="btn_signout"):
+            for k in ["sheet_id", "active_tab", "categories"]:
+                st.session_state.pop(k, None)
+            st.rerun()
+
     st.markdown("---")
 
     # Fetch tabs once so all sections below can use active_tab
@@ -456,7 +395,12 @@ with st.sidebar:
             else:
                 selected_cat = st.selectbox("Category", cat_list, key="tx_cat")
 
-        amount = st.number_input("Amount ($)", min_value=0.01, step=0.01, format="%.2f", key="tx_amount")
+        amount_raw = st.text_input("Amount ($)", value="", placeholder="e.g. 150.00", key="tx_amount")
+        try:
+            amount = float(amount_raw.replace(",", ".")) if amount_raw.strip() else 0.0
+        except ValueError:
+            amount = 0.0
+            st.caption("⚠️ Enter a valid number.")
         note   = st.text_input("Note (optional)", placeholder="e.g. Netflix", key="tx_note")
 
         if st.button("Add Transaction ✓", key="btn_add_tx"):
@@ -812,6 +756,6 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style='text-align:center;color:#2a2a40;font-size:0.72rem;padding:8px 0;'>
-    Money Tracker · Auth via streamlit-authenticator · Data in Google Sheets · Meta in Firestore
+    Money Tracker · No login required · Data in Google Sheets · Categories in Firestore
 </div>
 """, unsafe_allow_html=True)
