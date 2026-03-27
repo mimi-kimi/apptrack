@@ -266,8 +266,16 @@ def pct(value: float, income: float) -> float:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  SHEET ID GATE  (no login — user pastes their Google Sheet ID once per session)
+#  SHEET ID GATE
+#  Sheet ID is stored in st.query_params so it persists across refreshes and
+#  browser restarts. The URL becomes: https://your-app.streamlit.app/?sid=...
+#  Clearing ?sid from the URL (or clicking Sign Out) logs the user out.
 # ═════════════════════════════════════════════════════════════════════════════
+
+# Seed session_state from query params on every cold load
+if "sheet_id" not in st.session_state and "sid" in st.query_params:
+    st.session_state.sheet_id = st.query_params["sid"]
+
 if "sheet_id" not in st.session_state:
     st.markdown(
         """
@@ -278,7 +286,7 @@ if "sheet_id" not in st.session_state:
             <div style='color:#55556a;font-size:0.85rem;margin-bottom:32px;'>
                 Paste your Google Sheet ID to load your data.<br>
                 <span style='color:#33334a;font-size:0.75rem;'>
-                Found in your Sheet URL:
+                Found in your Sheet URL:<br>
                 docs.google.com/spreadsheets/d/<b style='color:#6666c0'>SHEET_ID</b>/edit
                 </span>
             </div>
@@ -301,7 +309,9 @@ if "sheet_id" not in st.session_state:
                 try:
                     gc = get_gspread_client()
                     gc.open_by_key(sid)
+                    # Persist in both session_state AND the URL query param
                     st.session_state.sheet_id = sid
+                    st.query_params["sid"] = sid
                     st.rerun()
                 except gspread.exceptions.SpreadsheetNotFound:
                     st.error("Sheet not found — make sure the service account is shared as Editor.")
@@ -310,6 +320,8 @@ if "sheet_id" not in st.session_state:
     st.stop()
 
 SHEET_ID = st.session_state.sheet_id
+# Keep query param in sync (covers the case where session was seeded from URL)
+st.query_params["sid"] = SHEET_ID
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -356,14 +368,16 @@ with st.sidebar:
                     st.session_state.sheet_id   = sid
                     st.session_state.active_tab = None
                     st.session_state.pop("categories", None)
+                    st.query_params["sid"] = sid
                     st.rerun()
                 except gspread.exceptions.SpreadsheetNotFound:
                     st.error("Sheet not found — check it's shared with the service account.")
                 except Exception as e:
                     st.error(f"Error: {e}")
-        if st.button("Sign out (clear session)", key="btn_signout"):
+        if st.button("Sign out", key="btn_signout"):
             for k in ["sheet_id", "active_tab", "categories"]:
                 st.session_state.pop(k, None)
+            st.query_params.clear()
             st.rerun()
 
     st.markdown("---")
