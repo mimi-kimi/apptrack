@@ -1,12 +1,13 @@
 # =============================================================================
 #  💰 Money Tracker — Cloud Edition
-#  No login — Sheet ID pasted once per session identifies the user
-#  User data: Firestore (stores sheet_id per user)
-#  Transactions: Google Sheets via gspread
-#  Charts: Plotly grouped bar (Ideal vs Actual 50/30/20)
+#  Auth : streamlit-authenticator  (credentials in st.secrets)
+#  Meta : Firestore                (sheet_id + categories per user)
+#  Data : Google Sheets via gspread (one tab = one track)
+#  Chart: Plotly grouped bar       (Ideal vs Actual 50/30/20)
 # =============================================================================
 
 import streamlit as st
+import streamlit_authenticator as stauth
 import pandas as pd
 import plotly.graph_objects as go
 import gspread
@@ -14,7 +15,7 @@ from google.cloud import firestore
 from google.oauth2 import service_account
 from datetime import datetime
 
-# ── Page config (must be first Streamlit call) ────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Money Tracker",
     page_icon="💰",
@@ -22,15 +23,15 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Global CSS ────────────────────────────────────────────────────────────────
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap');
 
-html, body, [class*="css"]         { font-family: 'DM Mono', monospace; }
-h1, h2, h3, h4, .syne             { font-family: 'Syne', sans-serif !important; }
+html, body, [class*="css"]  { font-family: 'DM Mono', monospace; }
+h1, h2, h3, h4              { font-family: 'Syne', sans-serif !important; }
 
-/* ── Sidebar ── */
+/* Sidebar */
 [data-testid="stSidebar"] {
     background: #0a0a0f !important;
     border-right: 1px solid #1e1e2e;
@@ -43,56 +44,45 @@ h1, h2, h3, h4, .syne             { font-family: 'Syne', sans-serif !important; 
     color: #55556a !important;
 }
 
-/* ── Main canvas ── */
+/* Main canvas */
 [data-testid="stAppViewContainer"] { background: #0d0d18; }
 .main { background: #0d0d18; }
 
-/* ── Metric card ── */
+/* Metric card */
 .mcard {
-    background: #111120;
-    border: 1px solid #1e1e30;
-    border-radius: 14px;
-    padding: 20px 22px;
-    text-align: center;
-}
-.mcard-label { font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: #44445a; margin-bottom: 8px; }
-.mcard-value { font-family: 'Syne', sans-serif; font-size: 1.75rem; font-weight: 800; color: #e8e8f8; }
-.mcard-sub   { font-size: 0.7rem; color: #44445a; margin-top: 5px; }
-
-/* ── Health pill ── */
-.hcard {
     background: #111120; border: 1px solid #1e1e30;
-    border-radius: 12px; padding: 14px 18px; text-align: center;
+    border-radius: 14px; padding: 20px 22px; text-align: center;
 }
-.hcard-title { font-family:'Syne',sans-serif; font-size:0.9rem; font-weight:700; color:#c9c9e0; }
-.hcard-sub   { font-size:0.72rem; color:#44445a; margin:4px 0; }
-.hcard-status{ font-size:0.82rem; font-weight:600; margin-top:6px; }
+.mcard-label { font-size:0.68rem; letter-spacing:0.12em; text-transform:uppercase; color:#44445a; margin-bottom:8px; }
+.mcard-value { font-family:'Syne',sans-serif; font-size:1.75rem; font-weight:800; color:#e8e8f8; }
+.mcard-sub   { font-size:0.7rem; color:#44445a; margin-top:5px; }
 
-/* ── Section title ── */
+/* Health card */
+.hcard { background:#111120; border:1px solid #1e1e30; border-radius:12px; padding:14px 18px; text-align:center; }
+.hcard-title  { font-family:'Syne',sans-serif; font-size:0.9rem; font-weight:700; color:#c9c9e0; }
+.hcard-sub    { font-size:0.72rem; color:#44445a; margin:4px 0; }
+.hcard-status { font-size:0.82rem; font-weight:600; margin-top:6px; }
+
+/* Section title */
 .stitle {
     font-family:'Syne',sans-serif; font-size:1rem; font-weight:700;
     color:#888898; letter-spacing:0.06em; text-transform:uppercase;
     border-bottom:1px solid #1e1e30; padding-bottom:8px; margin:28px 0 16px;
 }
 
-/* ── Buttons ── */
+/* Buttons */
 .stButton > button {
-    background: #1a1a2e !important;
-    border: 1px solid #2e2e4e !important;
-    color: #a0a0c8 !important;
-    border-radius: 10px !important;
-    font-family: 'DM Mono', monospace !important;
-    font-size: 0.8rem !important;
-    letter-spacing: 0.04em !important;
-    transition: all 0.2s !important;
+    background: #1a1a2e !important; border: 1px solid #2e2e4e !important;
+    color: #a0a0c8 !important; border-radius: 10px !important;
+    font-family: 'DM Mono', monospace !important; font-size: 0.8rem !important;
+    letter-spacing: 0.04em !important; transition: all 0.2s !important;
 }
 .stButton > button:hover {
-    background: #2e2e4e !important;
-    border-color: #5050a0 !important;
+    background: #2e2e4e !important; border-color: #5050a0 !important;
     color: #e0e0ff !important;
 }
 
-/* ── Inputs ── */
+/* Inputs — grey background, white text, blank by default */
 .stSelectbox > div > div,
 .stTextInput > div > div > input,
 .stNumberInput > div > div > input {
@@ -104,17 +94,24 @@ h1, h2, h3, h4, .syne             { font-family: 'Syne', sans-serif !important; 
 }
 .stTextInput > div > div > input::placeholder { color: #55556a !important; }
 
+/* Login form */
+div[data-testid="stForm"] {
+    background: #111120; border: 1px solid #1e1e30;
+    border-radius: 16px; padding: 32px 36px;
+    max-width: 440px; margin: 60px auto 0;
+}
+
 hr { border-color: #1e1e30 !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 #  CONSTANTS
-# ═════════════════════════════════════════════════════════════════════════════
-IDEAL       = {"Needs": 50, "Wants": 30, "Savings": 20}
-BUCKETS     = ["Needs", "Wants", "Savings"]
-BUCKET_CLR  = {"Needs": "#4ECDC4", "Wants": "#FFE66D", "Savings": "#A8E6CF"}
+# =============================================================================
+IDEAL      = {"Needs": 50, "Wants": 30, "Savings": 20}
+BUCKETS    = ["Needs", "Wants", "Savings"]
+BUCKET_CLR = {"Needs": "#4ECDC4", "Wants": "#FFE66D", "Savings": "#A8E6CF"}
 
 DEFAULT_CATEGORIES = {
     "Needs":   ["Rent", "Groceries", "Utilities", "Transport", "Insurance", "Healthcare"],
@@ -122,44 +119,26 @@ DEFAULT_CATEGORIES = {
     "Savings": ["Emergency Fund", "Investments", "Retirement"],
 }
 
-# Google Sheets column layout
 GS_COLS = ["date", "sheet_name", "type", "bucket", "category", "amount", "note"]
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  SERVICE CLIENTS  (cached — created once per session)
-# ═════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+#  SERVICE CLIENTS
+# =============================================================================
 @st.cache_resource
 def get_firestore_client() -> firestore.Client:
-    """
-    Build a Firestore client from service-account credentials stored in
-    st.secrets["gcp_service_account"].  The secret must be a TOML table
-    matching the fields of a GCP service-account JSON key file.
-    """
-    key_dict = dict(st.secrets["gcp_service_account"])
+    key   = dict(st.secrets["gcp_service_account"])
     creds = service_account.Credentials.from_service_account_info(
-        key_dict,
-        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        key, scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
-    # If your Firestore database is NOT named "(default)", add this line
-    # to [gcp_service_account] in secrets.toml:  firestore_database = "your-db-name"
-    db_name = key_dict.get("firestore_database", "(default)")
-    return firestore.Client(
-        project=key_dict["project_id"],
-        credentials=creds,
-        database=db_name,
-    )
+    return firestore.Client(project=key["project_id"], credentials=creds)
 
 
 @st.cache_resource
 def get_gspread_client() -> gspread.Client:
-    """
-    Build a gspread client from the same service-account credentials.
-    The service account must be shared as an Editor on every user's Sheet.
-    """
-    key_dict = dict(st.secrets["gcp_service_account"])
+    key   = dict(st.secrets["gcp_service_account"])
     creds = service_account.Credentials.from_service_account_info(
-        key_dict,
+        key,
         scopes=[
             "https://spreadsheets.google.com/feeds",
             "https://www.googleapis.com/auth/drive",
@@ -168,50 +147,56 @@ def get_gspread_client() -> gspread.Client:
     return gspread.authorize(creds)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 #  FIRESTORE HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
-def fs_get_categories(sheet_id: str) -> dict:
-    """Load categories from Firestore keyed by sheet_id, falling back to defaults."""
-    db  = get_firestore_client()
-    ref = db.collection("sheets").document(sheet_id).collection("meta").document("categories")
-    doc = ref.get()
+# =============================================================================
+def fs_get_user(username: str) -> dict | None:
+    doc = get_firestore_client().collection("users").document(username).get()
+    return doc.to_dict() if doc.exists else None
+
+
+def fs_upsert_user(username: str, email: str, sheet_id: str) -> None:
+    get_firestore_client().collection("users").document(username).set(
+        {"email": email, "sheet_id": sheet_id, "updated_at": datetime.utcnow()},
+        merge=True,
+    )
+
+
+def fs_get_categories(username: str) -> dict:
+    doc = (
+        get_firestore_client()
+        .collection("users").document(username)
+        .collection("meta").document("categories")
+        .get()
+    )
     return doc.to_dict() if doc.exists else dict(DEFAULT_CATEGORIES)
 
 
-def fs_save_categories(sheet_id: str, categories: dict) -> None:
-    """Save categories to Firestore keyed by sheet_id."""
-    db  = get_firestore_client()
-    ref = db.collection("sheets").document(sheet_id).collection("meta").document("categories")
-    ref.set(categories)
+def fs_save_categories(username: str, cats: dict) -> None:
+    (
+        get_firestore_client()
+        .collection("users").document(username)
+        .collection("meta").document("categories")
+    ).set(cats)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 #  GOOGLE SHEETS HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
-def gs_get_or_create_worksheet(sheet_id: str, tab_name: str) -> gspread.Worksheet:
-    """
-    Open a Google Spreadsheet by its ID and return the named worksheet,
-    creating it (with header row) if it doesn't exist yet.
-    """
-    gc   = get_gspread_client()
-    book = gc.open_by_key(sheet_id)
+# =============================================================================
+def gs_worksheet(sheet_id: str, tab: str) -> gspread.Worksheet:
+    book = get_gspread_client().open_by_key(sheet_id)
     try:
-        ws = book.worksheet(tab_name)
+        ws = book.worksheet(tab)
     except gspread.WorksheetNotFound:
-        ws = book.add_worksheet(title=tab_name, rows=1000, cols=len(GS_COLS))
+        ws = book.add_worksheet(title=tab, rows=1000, cols=len(GS_COLS))
         ws.append_row(GS_COLS)
-    # Ensure header exists even on pre-existing sheet
-    first = ws.row_values(1)
-    if first != GS_COLS:
+    if ws.row_values(1) != GS_COLS:
         ws.insert_row(GS_COLS, 1)
     return ws
 
 
-def gs_load_transactions(sheet_id: str, tab_name: str) -> pd.DataFrame:
-    """Load all transactions from a worksheet into a DataFrame."""
-    ws   = gs_get_or_create_worksheet(sheet_id, tab_name)
-    rows = ws.get_all_records(expected_headers=GS_COLS)
+def gs_load(sheet_id: str, tab: str) -> pd.DataFrame:
+    rows = gs_worksheet(sheet_id, tab).get_all_records(expected_headers=GS_COLS)
     if not rows:
         return pd.DataFrame(columns=GS_COLS)
     df = pd.DataFrame(rows)
@@ -219,143 +204,187 @@ def gs_load_transactions(sheet_id: str, tab_name: str) -> pd.DataFrame:
     return df
 
 
-def gs_append_transaction(sheet_id: str, tab_name: str, txn: dict) -> None:
-    """Append a single transaction row to the worksheet."""
-    ws  = gs_get_or_create_worksheet(sheet_id, tab_name)
-    row = [txn.get(col, "") for col in GS_COLS]
-    ws.append_row(row, value_input_option="USER_ENTERED")
-
-
-def gs_delete_row(sheet_id: str, tab_name: str, row_index_1based: int) -> None:
-    """Delete a worksheet row by 1-based index (row 1 = header)."""
-    ws = gs_get_or_create_worksheet(sheet_id, tab_name)
-    ws.delete_rows(row_index_1based)
-
-
-def gs_list_sheet_tabs(sheet_id: str) -> list[str]:
-    """Return all worksheet tab names in the Google Spreadsheet."""
-    gc   = get_gspread_client()
-    book = gc.open_by_key(sheet_id)
-    return [ws.title for ws in book.worksheets()]
-
-
-def gs_delete_worksheet(sheet_id: str, tab_name: str) -> None:
-    """Delete a worksheet tab from the Google Spreadsheet."""
-    gc   = get_gspread_client()
-    book = gc.open_by_key(sheet_id)
-    ws   = book.worksheet(tab_name)
-    book.del_worksheet(ws)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  BUSINESS LOGIC
-# ═════════════════════════════════════════════════════════════════════════════
-def compute_summary(df: pd.DataFrame) -> dict:
-    income    = df[df["type"] == "Income"]["amount"].sum()
-    exp_df    = df[df["type"] == "Expense"]
-    needs     = exp_df[exp_df["bucket"] == "Needs"]["amount"].sum()
-    wants     = exp_df[exp_df["bucket"] == "Wants"]["amount"].sum()
-    savings   = exp_df[exp_df["bucket"] == "Savings"]["amount"].sum()
-    total_exp = needs + wants + savings
-    return dict(income=income, needs=needs, wants=wants,
-                savings=savings, total_exp=total_exp, balance=income - total_exp)
-
-
-def pct(value: float, income: float) -> float:
-    return round(value / income * 100, 1) if income else 0.0
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  SHEET ID GATE
-#  Sheet ID is stored in st.query_params so it persists across refreshes and
-#  browser restarts. The URL becomes: https://your-app.streamlit.app/?sid=...
-#  Clearing ?sid from the URL (or clicking Sign Out) logs the user out.
-# ═════════════════════════════════════════════════════════════════════════════
-
-# Seed session_state from query params on every cold load
-if "sheet_id" not in st.session_state and "sid" in st.query_params:
-    st.session_state.sheet_id = st.query_params["sid"]
-
-if "sheet_id" not in st.session_state:
-    st.markdown(
-        """
-        <div style='text-align:center;margin:60px auto 0;max-width:500px;'>
-            <div style='font-size:3rem;margin-bottom:12px;'>💰</div>
-            <div style='font-family:Syne,sans-serif;font-size:2rem;font-weight:800;
-                        color:#e8e8f8;margin-bottom:8px;'>Money Tracker</div>
-            <div style='color:#55556a;font-size:0.85rem;margin-bottom:32px;'>
-                Paste your Google Sheet ID to load your data.<br>
-                <span style='color:#33334a;font-size:0.75rem;'>
-                Found in your Sheet URL:<br>
-                docs.google.com/spreadsheets/d/<b style='color:#6666c0'>SHEET_ID</b>/edit
-                </span>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+def gs_append(sheet_id: str, tab: str, txn: dict) -> None:
+    gs_worksheet(sheet_id, tab).append_row(
+        [txn.get(c, "") for c in GS_COLS], value_input_option="USER_ENTERED"
     )
-    _, mid, _ = st.columns([1, 2, 1])
-    with mid:
-        sid_input = st.text_input(
-            "Sheet ID",
-            placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74…",
-            label_visibility="collapsed",
-        )
-        if st.button("Open My Sheet →", use_container_width=True):
-            sid = sid_input.strip()
-            if not sid:
-                st.error("Please paste your Sheet ID.")
-            else:
-                try:
-                    gc = get_gspread_client()
-                    gc.open_by_key(sid)
-                    # Persist in both session_state AND the URL query param
-                    st.session_state.sheet_id = sid
-                    st.query_params["sid"] = sid
-                    st.rerun()
-                except gspread.exceptions.SpreadsheetNotFound:
-                    st.error("Sheet not found — make sure the service account is shared as Editor.")
-                except Exception as e:
-                    st.error(f"Error: {e}")
+
+
+def gs_delete_row(sheet_id: str, tab: str, row_1based: int) -> None:
+    gs_worksheet(sheet_id, tab).delete_rows(row_1based)
+
+
+def gs_tabs(sheet_id: str) -> list[str]:
+    return [ws.title for ws in get_gspread_client().open_by_key(sheet_id).worksheets()]
+
+
+def gs_delete_tab(sheet_id: str, tab: str) -> None:
+    book = get_gspread_client().open_by_key(sheet_id)
+    book.del_worksheet(book.worksheet(tab))
+
+
+# =============================================================================
+#  BUSINESS LOGIC
+# =============================================================================
+def summarise(df: pd.DataFrame) -> dict:
+    income  = df[df["type"] == "Income"]["amount"].sum()
+    exp     = df[df["type"] == "Expense"]
+    needs   = exp[exp["bucket"] == "Needs"]["amount"].sum()
+    wants   = exp[exp["bucket"] == "Wants"]["amount"].sum()
+    savings = exp[exp["bucket"] == "Savings"]["amount"].sum()
+    total   = needs + wants + savings
+    return dict(income=income, needs=needs, wants=wants,
+                savings=savings, total_exp=total, balance=income - total)
+
+
+def pct(v: float, inc: float) -> float:
+    return round(v / inc * 100, 1) if inc else 0.0
+
+
+def hex_to_rgba(h: str, a: float) -> str:
+    h = h.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{a})"
+
+
+# =============================================================================
+#  AUTHENTICATION
+#
+#  Add this to Streamlit Cloud → Settings → Secrets:
+#
+#  [auth]
+#  cookie_name   = "mt_auth"
+#  cookie_key    = "any-random-32-char-string"
+#  cookie_expiry = 30
+#
+#  [auth.credentials.usernames.alice]
+#  email    = "alice@example.com"
+#  name     = "Alice"
+#  password = "$2b$12$..."   # generate: stauth.Hasher.hash("plaintext")
+# =============================================================================
+def build_authenticator() -> stauth.Authenticate:
+    cfg   = st.secrets["auth"]
+    creds = {"usernames": {}}
+    for uname, udata in cfg["credentials"]["usernames"].items():
+        creds["usernames"][uname] = {
+            "email":    udata["email"],
+            "name":     udata["name"],
+            "password": udata["password"],
+        }
+    return stauth.Authenticate(
+        credentials=creds,
+        cookie_name=cfg["cookie_name"],
+        cookie_key=cfg["cookie_key"],
+        cookie_expiry_days=int(cfg.get("cookie_expiry", 30)),
+    )
+
+
+authenticator = build_authenticator()
+
+# ── Login gate ────────────────────────────────────────────────────────────────
+authenticator.login(location="main")
+
+auth_status = st.session_state.get("authentication_status")
+username    = st.session_state.get("username")
+name        = st.session_state.get("name")
+
+if auth_status is False:
+    st.error("Incorrect username or password.")
     st.stop()
 
-SHEET_ID = st.session_state.sheet_id
-# Keep query param in sync (covers the case where session was seeded from URL)
-st.query_params["sid"] = SHEET_ID
+if auth_status is None:
+    st.markdown("""
+    <div style='text-align:center;margin-top:60px;'>
+        <div style='font-size:3rem;'>💰</div>
+        <div style='font-family:Syne,sans-serif;font-size:2.2rem;font-weight:800;
+                    color:#e8e8f8;margin:10px 0 6px;'>Money Tracker</div>
+        <div style='color:#44445a;font-size:0.85rem;'>Sign in to manage your finances.</div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+# =============================================================================
+#  POST-LOGIN: load or provision user in Firestore
+# =============================================================================
+user_doc = fs_get_user(username)
+
+if not user_doc or not user_doc.get("sheet_id"):
+    st.markdown(f"""
+    <div style='text-align:center;margin:50px auto;max-width:520px;'>
+        <div style='font-family:Syne,sans-serif;font-size:1.6rem;
+                    font-weight:800;color:#e8e8f8;'>👋 Welcome, {name}!</div>
+        <div style='color:#55556a;margin-top:10px;font-size:0.85rem;'>
+            Paste your <b>Google Sheet ID</b> to get started.<br><br>
+            Find it in your Sheet URL:<br>
+            <code>docs.google.com/spreadsheets/d/<b>SHEET_ID</b>/edit</code><br><br>
+            Share the sheet with the service-account email as <b>Editor</b> first.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        sid_in = st.text_input(
+            "Google Sheet ID",
+            placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74…",
+        )
+        if st.button("Save & Continue", use_container_width=True):
+            if sid_in.strip():
+                try:
+                    get_gspread_client().open_by_key(sid_in.strip())
+                    email = st.secrets["auth"]["credentials"]["usernames"][username]["email"]
+                    fs_upsert_user(username, email, sid_in.strip())
+                    st.success("Saved! Reloading…")
+                    st.rerun()
+                except gspread.exceptions.SpreadsheetNotFound:
+                    st.error("Sheet not found — check the ID and sharing settings.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+            else:
+                st.error("Please enter a Sheet ID.")
+    st.stop()
+
+SHEET_ID = user_doc["sheet_id"]
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  SESSION STATE BOOTSTRAP
-# ═════════════════════════════════════════════════════════════════════════════
+# =============================================================================
+#  SESSION STATE
+# =============================================================================
 if "active_tab" not in st.session_state:
-    tabs = gs_list_sheet_tabs(SHEET_ID)
+    tabs = gs_tabs(SHEET_ID)
     st.session_state.active_tab = tabs[0] if tabs else None
 
 if "categories" not in st.session_state:
-    st.session_state.categories = fs_get_categories(SHEET_ID)
+    st.session_state.categories = fs_get_categories(username)
 
 
-def save_categories():
-    fs_save_categories(SHEET_ID, st.session_state.categories)
+def save_cats():
+    fs_save_categories(username, st.session_state.categories)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 #  SIDEBAR
-# ═════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 with st.sidebar:
 
-    # ── App header ───────────────────────────────────────────────────────────
-    st.markdown(
-        "<div style='padding:10px 0 14px;font-family:Syne,sans-serif;"
-        "font-size:1.2rem;font-weight:800;color:#e8e8f8;'>💰 Money Tracker</div>",
-        unsafe_allow_html=True,
-    )
+    # ── User badge + sign out ─────────────────────────────────────────────────
+    st.markdown(f"""
+    <div style='padding:10px 0 14px;'>
+        <div style='font-family:Syne,sans-serif;font-size:1.1rem;
+                    font-weight:800;color:#e8e8f8;'>💰 Money Tracker</div>
+        <div style='font-size:0.75rem;color:#44445a;margin-top:2px;'>
+            {name} &nbsp;·&nbsp; @{username}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # ── Switch / Sign out ─────────────────────────────────────────────────────
-    with st.expander("🔗 Switch Sheet"):
-        st.caption(f"Active: `{SHEET_ID[:28]}…`")
-        new_sid = st.text_input("New Sheet ID", placeholder="Paste Sheet ID", key="switch_sheet_input")
-        if st.button("Switch", key="btn_switch_sheet"):
+    authenticator.logout(button_name="Sign out", location="sidebar")
+
+    # ── Change Sheet ──────────────────────────────────────────────────────────
+    with st.expander("🔗 Change Google Sheet"):
+        st.caption(f"Current: `{SHEET_ID[:26]}…`")
+        new_sid = st.text_input("New Sheet ID", placeholder="Paste Sheet ID",
+                                key="change_sid_input")
+        if st.button("Save", key="btn_change_sid"):
             sid = new_sid.strip()
             if not sid:
                 st.error("Paste a Sheet ID first.")
@@ -363,27 +392,21 @@ with st.sidebar:
                 st.info("Already using that sheet.")
             else:
                 try:
-                    gc = get_gspread_client()
-                    gc.open_by_key(sid)
-                    st.session_state.sheet_id   = sid
+                    get_gspread_client().open_by_key(sid)
+                    email = st.secrets["auth"]["credentials"]["usernames"][username]["email"]
+                    fs_upsert_user(username, email, sid)
                     st.session_state.active_tab = None
-                    st.session_state.pop("categories", None)
-                    st.query_params["sid"] = sid
+                    st.success("Updated! Reloading…")
                     st.rerun()
                 except gspread.exceptions.SpreadsheetNotFound:
-                    st.error("Sheet not found — check it's shared with the service account.")
+                    st.error("Sheet not found — check sharing settings.")
                 except Exception as e:
                     st.error(f"Error: {e}")
-        if st.button("Sign out", key="btn_signout"):
-            for k in ["sheet_id", "active_tab", "categories"]:
-                st.session_state.pop(k, None)
-            st.query_params.clear()
-            st.rerun()
 
     st.markdown("---")
 
-    # Fetch tabs once so all sections below can use active_tab
-    all_tabs   = gs_list_sheet_tabs(SHEET_ID)
+    # Resolve active tab
+    all_tabs   = gs_tabs(SHEET_ID)
     active_tab = (
         st.session_state.active_tab
         if st.session_state.active_tab in all_tabs
@@ -409,17 +432,21 @@ with st.sidebar:
             else:
                 selected_cat = st.selectbox("Category", cat_list, key="tx_cat")
 
-        amount_raw = st.text_input("Amount ($)", value="", placeholder="e.g. 150.00", key="tx_amount")
+        # Blank amount — user types immediately, no pre-filled 0.00
+        amount_raw = st.text_input(
+            "Amount ($)", value="", placeholder="e.g. 150.00", key="tx_amount"
+        )
         try:
             amount = float(amount_raw.replace(",", ".")) if amount_raw.strip() else 0.0
         except ValueError:
             amount = 0.0
             st.caption("⚠️ Enter a valid number.")
-        note   = st.text_input("Note (optional)", placeholder="e.g. Netflix", key="tx_note")
+
+        note = st.text_input("Note (optional)", placeholder="e.g. Netflix", key="tx_note")
 
         if st.button("Add Transaction ✓", key="btn_add_tx"):
             if selected_cat and amount > 0:
-                gs_append_transaction(SHEET_ID, active_tab, {
+                gs_append(SHEET_ID, active_tab, {
                     "date":       datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "sheet_name": active_tab,
                     "type":       tx_type,
@@ -443,29 +470,28 @@ with st.sidebar:
         current_cats = st.session_state.categories.get(bucket_edit, [])
         st.caption(f"Current: {', '.join(current_cats) or 'none'}")
 
-        new_cat = st.text_input("Add category", key="new_cat_input", placeholder="e.g. Gym")
+        new_cat = st.text_input("Add category", placeholder="e.g. Gym", key="new_cat_input")
         if st.button("Add", key="btn_add_cat"):
             if new_cat and new_cat not in current_cats:
                 st.session_state.categories[bucket_edit].append(new_cat)
-                save_categories()
+                save_cats()
                 st.rerun()
 
         if current_cats:
             del_cat = st.selectbox("Remove", ["(select)"] + current_cats, key="del_cat_sel")
             if st.button("Remove", key="btn_del_cat") and del_cat != "(select)":
                 st.session_state.categories[bucket_edit].remove(del_cat)
-                save_categories()
+                save_cats()
                 st.rerun()
 
     st.markdown("---")
 
-    # ── 3. Track selector + Rename + Delete ───────────────────────────────────
+    # ── 3. Tracks ─────────────────────────────────────────────────────────────
     st.markdown("### 📁 Tracks")
 
     if all_tabs:
         active_tab = st.selectbox(
-            "Active track",
-            options=all_tabs,
+            "Active track", options=all_tabs,
             index=all_tabs.index(st.session_state.active_tab)
                   if st.session_state.active_tab in all_tabs else 0,
             key="tab_selector",
@@ -483,10 +509,8 @@ with st.sidebar:
                     if new_tab_name in all_tabs:
                         st.error("Name already taken.")
                     else:
-                        gc   = get_gspread_client()
-                        book = gc.open_by_key(SHEET_ID)
-                        ws   = book.worksheet(active_tab)
-                        ws.update_title(new_tab_name)
+                        book = get_gspread_client().open_by_key(SHEET_ID)
+                        book.worksheet(active_tab).update_title(new_tab_name)
                         st.session_state.active_tab = new_tab_name
                         st.rerun()
 
@@ -494,13 +518,13 @@ with st.sidebar:
         with st.expander("🗑️ Delete track"):
             st.markdown(
                 f"<div style='color:#FF6B6B;font-size:0.82rem;margin-bottom:10px;'>"
-                f"⚠️ Permanently delete <b>{active_tab}</b> and all its rows.<br>"
-                f"This cannot be undone.</div>",
+                f"⚠️ Permanently delete <b>{active_tab}</b> and all its rows. "
+                f"Cannot be undone.</div>",
                 unsafe_allow_html=True,
             )
             confirmed = st.checkbox(f'Yes, delete "{active_tab}"', key="confirm_del_tab")
             if st.button("Delete Track", key="btn_del_tab", disabled=not confirmed):
-                gs_delete_worksheet(SHEET_ID, active_tab)
+                gs_delete_tab(SHEET_ID, active_tab)
                 remaining = [t for t in all_tabs if t != active_tab]
                 st.session_state.active_tab = remaining[-1] if remaining else None
                 st.rerun()
@@ -509,76 +533,73 @@ with st.sidebar:
 
     # ── 4. New Track ──────────────────────────────────────────────────────────
     st.markdown("### ➕ New Track")
-    new_tab_input = st.text_input("Track name", placeholder="e.g. March 2026", key="new_tab_input")
-    carry_opt     = st.radio(
+    new_tab = st.text_input("Track name", placeholder="e.g. March 2026", key="new_tab_input")
+    carry   = st.radio(
         "Starting balance",
         ["Clear Start ($0)", "Carry Over from current track"],
         key="carry_opt",
     )
 
     if st.button("Create Track", key="btn_create_tab"):
-        if not new_tab_input:
+        if not new_tab:
             st.error("Enter a track name.")
-        elif new_tab_input in all_tabs:
-            st.error("A track with that name already exists.")
+        elif new_tab in all_tabs:
+            st.error("Name already taken.")
         else:
-            gs_get_or_create_worksheet(SHEET_ID, new_tab_input)
-            if "Carry Over" in carry_opt and active_tab:
-                df_cur = gs_load_transactions(SHEET_ID, active_tab)
-                s      = compute_summary(df_cur)
+            gs_worksheet(SHEET_ID, new_tab)
+            if "Carry Over" in carry and active_tab:
+                s = summarise(gs_load(SHEET_ID, active_tab))
                 if s["balance"] > 0:
-                    gs_append_transaction(SHEET_ID, new_tab_input, {
+                    gs_append(SHEET_ID, new_tab, {
                         "date":       datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "sheet_name": new_tab_input,
+                        "sheet_name": new_tab,
                         "type":       "Income",
                         "bucket":     "Income",
                         "category":   "Initial Balance",
                         "amount":     round(s["balance"], 2),
                         "note":       f"Carried over from {active_tab}",
                     })
-            st.session_state.active_tab = new_tab_input
+            st.session_state.active_tab = new_tab
             st.rerun()
 
 
-
-# ═════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 #  MAIN DASHBOARD
-# ═════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 if not st.session_state.active_tab:
     st.markdown("""
     <div style='display:flex;flex-direction:column;align-items:center;
                 justify-content:center;height:65vh;gap:14px;'>
         <div style='font-size:3.5rem;'>💰</div>
-        <div style='font-family:Syne,sans-serif;font-size:2rem;font-weight:800;color:#e8e8f8;'>
-            Money Tracker
-        </div>
+        <div style='font-family:Syne,sans-serif;font-size:2rem;
+                    font-weight:800;color:#e8e8f8;'>Money Tracker</div>
         <div style='color:#44445a;'>Create your first track in the sidebar.</div>
     </div>
     """, unsafe_allow_html=True)
     st.stop()
 
-# ── Load data from Google Sheets ──────────────────────────────────────────────
-with st.spinner("Loading transactions…"):
-    df = gs_load_transactions(SHEET_ID, st.session_state.active_tab)
-
-summ = compute_summary(df)
+with st.spinner("Loading…"):
+    df   = gs_load(SHEET_ID, st.session_state.active_tab)
+summ = summarise(df)
+inc  = summ["income"]
 
 # ── Page header ───────────────────────────────────────────────────────────────
 st.markdown(f"""
 <div style='margin-bottom:4px;'>
-    <span style='font-family:Syne,sans-serif;font-size:2rem;font-weight:800;color:#e8e8f8;'>
+    <span style='font-family:Syne,sans-serif;font-size:2rem;
+                 font-weight:800;color:#e8e8f8;'>
         {st.session_state.active_tab}
     </span>
 </div>
 <div style='color:#44445a;font-size:0.8rem;margin-bottom:24px;'>
-    {len(df)} transaction{"s" if len(df) != 1 else ""}  ·  Sheet ID: <code>{SHEET_ID[:20]}…</code>
+    {len(df)} transaction{"s" if len(df) != 1 else ""}
 </div>
 """, unsafe_allow_html=True)
 
 # ── Summary cards ─────────────────────────────────────────────────────────────
 c1, c2, c3, c4, c5 = st.columns(5)
 
-def metric_card(col, label: str, value: str, sub: str = "", color: str = "#e8e8f8"):
+def mcard(col, label, value, sub="", color="#e8e8f8"):
     col.markdown(f"""
     <div class='mcard'>
         <div class='mcard-label'>{label}</div>
@@ -586,190 +607,129 @@ def metric_card(col, label: str, value: str, sub: str = "", color: str = "#e8e8f
         <div class='mcard-sub'>{sub}</div>
     </div>""", unsafe_allow_html=True)
 
-inc = summ["income"]
-metric_card(c1, "Income",  f"${inc:,.2f}",                                          color="#e8e8f8")
-metric_card(c2, "Needs",   f"${summ['needs']:,.2f}",   f"{pct(summ['needs'],   inc)}% of income", color="#4ECDC4")
-metric_card(c3, "Wants",   f"${summ['wants']:,.2f}",   f"{pct(summ['wants'],   inc)}% of income", color="#FFE66D")
-metric_card(c4, "Savings", f"${summ['savings']:,.2f}", f"{pct(summ['savings'], inc)}% of income", color="#A8E6CF")
-
-bal_color = "#A8E6CF" if summ["balance"] >= 0 else "#FF6B6B"
-metric_card(c5, "Balance", f"${summ['balance']:,.2f}", color=bal_color)
+mcard(c1, "Income",  f"${inc:,.2f}")
+mcard(c2, "Needs",   f"${summ['needs']:,.2f}",   f"{pct(summ['needs'],   inc)}% of income", "#4ECDC4")
+mcard(c3, "Wants",   f"${summ['wants']:,.2f}",   f"{pct(summ['wants'],   inc)}% of income", "#FFE66D")
+mcard(c4, "Savings", f"${summ['savings']:,.2f}", f"{pct(summ['savings'], inc)}% of income", "#A8E6CF")
+mcard(c5, "Balance", f"${summ['balance']:,.2f}",
+      color="#A8E6CF" if summ["balance"] >= 0 else "#FF6B6B")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── Plotly grouped bar chart: Ideal vs Actual ─────────────────────────────────
-st.markdown("<div class='stitle'>📊 50 / 30 / 20 Budget — Ideal vs Actual</div>", unsafe_allow_html=True)
+# ── Grouped bar chart: Ideal vs Actual ───────────────────────────────────────
+st.markdown("<div class='stitle'>📊 50 / 30 / 20 — Ideal vs Actual</div>",
+            unsafe_allow_html=True)
 
-actual_pcts = {b: pct(summ[b.lower()], inc) for b in BUCKETS}
-ideal_pcts  = {b: IDEAL[b] for b in BUCKETS}
-
-bar_colors  = [BUCKET_CLR[b] for b in BUCKETS]
-
-def hex_to_rgba(hex_color: str, alpha: float) -> str:
-    """Convert a 6-digit hex color to an rgba() string Plotly accepts."""
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"rgba({r},{g},{b},{alpha})"
-
-fade_colors = [hex_to_rgba(c, 0.2) for c in bar_colors]   # 20% opacity for ideal bars
+actual = {b: pct(summ[b.lower()], inc) for b in BUCKETS}
+bclrs  = [BUCKET_CLR[b] for b in BUCKETS]
+fade   = [hex_to_rgba(c, 0.2) for c in bclrs]
 
 fig = go.Figure()
-
 fig.add_trace(go.Bar(
-    name="Ideal",
-    x=BUCKETS,
-    y=[ideal_pcts[b] for b in BUCKETS],
-    marker=dict(
-        color=fade_colors,
-        line=dict(color=bar_colors, width=2),
-        pattern_shape="/",
-    ),
-    text=[f"{ideal_pcts[b]}%" for b in BUCKETS],
-    textposition="outside",
+    name="Ideal", x=BUCKETS, y=[IDEAL[b] for b in BUCKETS],
+    marker=dict(color=fade, line=dict(color=bclrs, width=2), pattern_shape="/"),
+    text=[f"{IDEAL[b]}%" for b in BUCKETS], textposition="outside",
     textfont=dict(size=12, color="#55556a", family="DM Mono"),
     hovertemplate="%{x} ideal: %{y}%<extra></extra>",
 ))
-
 fig.add_trace(go.Bar(
-    name="Actual",
-    x=BUCKETS,
-    y=[actual_pcts[b] for b in BUCKETS],
-    marker=dict(color=bar_colors),
-    text=[f"{actual_pcts[b]}%" for b in BUCKETS],
-    textposition="outside",
+    name="Actual", x=BUCKETS, y=[actual[b] for b in BUCKETS],
+    marker=dict(color=bclrs),
+    text=[f"{actual[b]}%" for b in BUCKETS], textposition="outside",
     textfont=dict(size=13, color="#e8e8f8", family="Syne"),
     hovertemplate="%{x} actual: %{y}%<extra></extra>",
 ))
 
-# Annotate over/under per bucket
-for i, b in enumerate(BUCKETS):
-    diff = actual_pcts[b] - ideal_pcts[b]
+for b in BUCKETS:
+    diff = actual[b] - IDEAL[b]
     if diff == 0:
         continue
-    sign  = "+" if diff > 0 else ""
-    clr   = "#FF6B6B" if diff > 5 else "#FFE66D" if diff > 0 else "#A8E6CF"
-    label = f"{sign}{diff:.1f}%"
+    clr = "#FF6B6B" if diff > 5 else "#FFE66D" if diff > 0 else "#A8E6CF"
     fig.add_annotation(
-        x=b, y=max(actual_pcts[b], ideal_pcts[b]) + 8,
-        text=label, showarrow=False,
-        font=dict(size=11, color=clr, family="DM Mono"),
+        x=b, y=max(actual[b], IDEAL[b]) + 8,
+        text=f"{'+'if diff>0 else ''}{diff:.1f}%",
+        showarrow=False, font=dict(size=11, color=clr, family="DM Mono"),
     )
 
 fig.update_layout(
     barmode="group",
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
     font=dict(family="DM Mono", color="#c9c9e0"),
-    legend=dict(
-        bgcolor="rgba(0,0,0,0)",
-        font=dict(size=12),
-        orientation="h",
-        x=0.5, xanchor="center",
-        y=1.08,
-    ),
-    yaxis=dict(
-        showgrid=True,
-        gridcolor="#1e1e30",
-        ticksuffix="%",
-        range=[0, max(max(actual_pcts.values(), default=0),
-                      max(ideal_pcts.values())) + 22],
-        zeroline=False,
-    ),
+    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=12),
+                orientation="h", x=0.5, xanchor="center", y=1.08),
+    yaxis=dict(showgrid=True, gridcolor="#1e1e30", ticksuffix="%",
+               range=[0, max(max(actual.values(), default=0), 50) + 22],
+               zeroline=False),
     xaxis=dict(showgrid=False),
-    margin=dict(t=50, b=20, l=0, r=0),
-    height=360,
-    bargap=0.25,
-    bargroupgap=0.08,
+    margin=dict(t=50, b=20, l=0, r=0), height=360,
+    bargap=0.25, bargroupgap=0.08,
 )
-
 st.plotly_chart(fig, use_container_width=True)
 
-# ── Budget health row ─────────────────────────────────────────────────────────
+# ── Budget health ─────────────────────────────────────────────────────────────
 if inc > 0:
     st.markdown("<div class='stitle'>🩺 Budget Health</div>", unsafe_allow_html=True)
     h1, h2, h3 = st.columns(3)
 
-    def health_card(col, bucket: str):
-        a, i = actual_pcts[bucket], ideal_pcts[bucket]
-        diff  = a - i
-        if abs(diff) <= 5:
-            status, clr = "✅ On Track",                "#A8E6CF"
-        elif diff > 5:
-            status, clr = f"⚠️ Over by {diff:.1f}%",   "#FF6B6B"
-        else:
-            status, clr = f"💡 Under by {abs(diff):.1f}%", "#FFE66D"
-
+    def hcard(col, bucket):
+        a, i = actual[bucket], IDEAL[bucket]
+        diff = a - i
+        if abs(diff) <= 5: status, clr = "✅ On Track",                    "#A8E6CF"
+        elif diff > 5:     status, clr = f"⚠️ Over by {diff:.1f}%",       "#FF6B6B"
+        else:              status, clr = f"💡 Under by {abs(diff):.1f}%",  "#FFE66D"
         col.markdown(f"""
         <div class='hcard'>
             <div class='hcard-title'>{bucket}</div>
-            <div class='hcard-sub'>Ideal {i}%  ·  Actual {a:.1f}%</div>
+            <div class='hcard-sub'>Ideal {i}% · Actual {a:.1f}%</div>
             <div class='hcard-status' style='color:{clr};'>{status}</div>
         </div>""", unsafe_allow_html=True)
 
-    health_card(h1, "Needs")
-    health_card(h2, "Wants")
-    health_card(h3, "Savings")
+    hcard(h1, "Needs")
+    hcard(h2, "Wants")
+    hcard(h3, "Savings")
     st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Transaction log ───────────────────────────────────────────────────────────
 st.markdown("<div class='stitle'>📋 Transaction Log</div>", unsafe_allow_html=True)
 
 if df.empty:
-    st.markdown("<p style='color:#44445a;text-align:center;padding:40px;'>No transactions yet.</p>",
-                unsafe_allow_html=True)
+    st.markdown(
+        "<p style='color:#44445a;text-align:center;padding:40px;'>No transactions yet.</p>",
+        unsafe_allow_html=True,
+    )
 else:
     fc1, fc2, fc3 = st.columns([2, 2, 2])
-    with fc1:
-        f_type   = st.selectbox("Filter type",   ["All", "Income", "Expense"], key="f_type")
-    with fc2:
-        f_bucket = st.selectbox("Filter bucket", ["All"] + BUCKETS + ["Income"], key="f_bucket")
-    with fc3:
-        f_sort   = st.selectbox("Sort", ["Newest first", "Oldest first"], key="f_sort")
+    with fc1: f_type   = st.selectbox("Filter type",   ["All", "Income", "Expense"], key="f_type")
+    with fc2: f_bucket = st.selectbox("Filter bucket", ["All"] + BUCKETS + ["Income"], key="f_bucket")
+    with fc3: f_sort   = st.selectbox("Sort", ["Newest first", "Oldest first"], key="f_sort")
 
     view = df.copy()
     if f_type   != "All": view = view[view["type"]   == f_type]
     if f_bucket != "All": view = view[view["bucket"] == f_bucket]
     if f_sort == "Newest first": view = view.iloc[::-1]
 
-    display = view[["date", "type", "bucket", "category", "amount", "note"]].copy()
-    display.columns = ["Date", "Type", "Bucket", "Category", "Amount ($)", "Note"]
-    display["Amount ($)"] = display["Amount ($)"].map(lambda x: f"${x:,.2f}")
+    disp = view[["date", "type", "bucket", "category", "amount", "note"]].copy()
+    disp.columns = ["Date", "Type", "Bucket", "Category", "Amount ($)", "Note"]
+    disp["Amount ($)"] = disp["Amount ($)"].map(lambda x: f"${x:,.2f}")
+    st.dataframe(disp, use_container_width=True, hide_index=True)
 
-    st.dataframe(
-        display,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Date":       st.column_config.TextColumn(width="medium"),
-            "Type":       st.column_config.TextColumn(width="small"),
-            "Bucket":     st.column_config.TextColumn(width="small"),
-            "Category":   st.column_config.TextColumn(width="medium"),
-            "Amount ($)": st.column_config.TextColumn(width="small"),
-            "Note":       st.column_config.TextColumn(width="large"),
-        },
-    )
-
-    # ── Delete a transaction ──────────────────────────────────────────────────
     with st.expander("🗑️ Delete a transaction"):
-        st.caption("Deletes from the Google Sheet. Cannot be undone.")
-        # Build label → original DataFrame index mapping
+        st.caption("Deletes from Google Sheets. Cannot be undone.")
         labels = {
             f"[{i+1}] {row['date']} — {row['type']} | {row['category']} | ${row['amount']:,.2f}": i
             for i, row in df.iterrows()
         }
-        del_choice = st.selectbox("Select row to delete", list(labels.keys()), key="del_tx_select")
+        del_choice = st.selectbox("Select row", list(labels.keys()), key="del_tx_select")
         if st.button("Delete Row", key="btn_del_tx"):
-            orig_idx    = labels[del_choice]
-            # +2 because Sheets rows are 1-based and row 1 is the header
-            sheet_row   = orig_idx + 2
-            gs_delete_row(SHEET_ID, st.session_state.active_tab, sheet_row)
-            st.success("Row deleted.")
+            gs_delete_row(SHEET_ID, st.session_state.active_tab, labels[del_choice] + 2)
+            st.success("Deleted.")
             st.rerun()
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
-st.markdown("""
-<div style='text-align:center;color:#2a2a40;font-size:0.72rem;padding:8px 0;'>
-    Money Tracker · No login required · Data in Google Sheets · Categories in Firestore
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    "<div style='text-align:center;color:#2a2a40;font-size:0.72rem;padding:8px 0;'>"
+    "Money Tracker · Login via streamlit-authenticator · "
+    "Data in Google Sheets · Meta in Firestore</div>",
+    unsafe_allow_html=True,
+)
