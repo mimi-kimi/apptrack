@@ -3,7 +3,7 @@
 #  No login — Sheet ID pasted once per session identifies the user
 #  User data: Firestore (stores sheet_id per user)
 #  Transactions: Google Sheets via gspread
-#  Charts: Plotly grouped bar (Ideal vs Actual 50/30/20)wadadsadasdwasdaw
+#  Charts: Plotly grouped bar (Ideal vs Actual 50/30/20)
 # =============================================================================
 
 import streamlit as st
