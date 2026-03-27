@@ -327,8 +327,16 @@ authenticator = build_authenticator()
 
 
 # ── Login gate ────────────────────────────────────────────────────────────────
-# Renders the login form; sets st.session_state["authentication_status"]
-name, auth_status, username = authenticator.login(location="main")
+# In streamlit-authenticator >= 0.3.x, .login() returns None and writes
+# results into st.session_state:
+#   ["authentication_status"] -> True | False | None
+#   ["username"] -> str | None
+#   ["name"] -> str | None
+authenticator.login(location="main")
+
+auth_status = st.session_state.get("authentication_status")
+username    = st.session_state.get("username")
+name        = st.session_state.get("name")
 
 if auth_status is False:
     st.error("Incorrect username or password.")
@@ -414,7 +422,7 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    authenticator.logout("Sign out", location="sidebar")
+    authenticator.logout(button_name="Sign out", location="sidebar")
     st.markdown("---")
 
     # ── Track selector ────────────────────────────────────────────────────────
@@ -627,7 +635,13 @@ actual_pcts = {b: pct(summ[b.lower()], inc) for b in BUCKETS}
 ideal_pcts  = {b: IDEAL[b] for b in BUCKETS}
 
 bar_colors  = [BUCKET_CLR[b] for b in BUCKETS]
-fade_colors = [c + "33" for c in bar_colors]   # 20 % opacity for ideal bars
+def hex_to_rgba(hex_color: str, alpha: float) -> str:
+    """Convert a 6-digit hex color to an rgba() string Plotly accepts."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+fade_colors = [hex_to_rgba(c, 0.2) for c in bar_colors]   # 20% opacity for ideal bars
 
 fig = go.Figure()
 
