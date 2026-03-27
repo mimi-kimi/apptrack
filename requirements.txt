@@ -1,3 +1,8 @@
-streamlit
-pandas
-plotly
+streamlit>=1.35.0
+streamlit-authenticator>=0.3.3
+gspread>=6.1.0
+google-cloud-firestore>=2.16.0
+google-auth>=2.29.0
+pandas>=2.0.0
+plotly>=5.20.0
+bcrypt>=4.1.0
