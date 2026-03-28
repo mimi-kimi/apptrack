@@ -670,20 +670,30 @@ st.plotly_chart(fig, use_container_width=True)
 if inc > 0:
     st.markdown("<div class='stitle'>🩺 Budget Health</div>", unsafe_allow_html=True)
     h1, h2, h3 = st.columns(3)
-
+ 
     def hcard(col, bucket):
-        a, i = actual[bucket], IDEAL[bucket]
-        diff = a - i
-        if abs(diff) <= 5: status, clr = "✅ On Track",                    "#A8E6CF"
-        elif diff > 5:     status, clr = f"⚠️ Over by {diff:.1f}%",       "#FF6B6B"
-        else:              status, clr = f"💡 Under by {abs(diff):.1f}%",  "#FFE66D"
+        a, i      = actual[bucket], IDEAL[bucket]
+        diff      = a - i
+        ideal_amt = f"${inc * i / 100:,.2f}"
+ 
+        if bucket == "Savings":
+            # Saving more than ideal is a good thing
+            if abs(diff) <= 5: status, clr = "✅ On Track",                   "#A8E6CF"
+            elif diff > 5:     status, clr = f"🌟 Extra by {diff:.1f}%",      "#A8E6CF"
+            else:              status, clr = f"⚠️ Short by {abs(diff):.1f}%", "#FF6B6B"
+        else:
+            # Spending more than ideal on Needs/Wants is a warning
+            if abs(diff) <= 5: status, clr = "✅ On Track",                    "#A8E6CF"
+            elif diff > 5:     status, clr = f"⚠️ Over by {diff:.1f}%",       "#FF6B6B"
+            else:              status, clr = f"💡 Under by {abs(diff):.1f}%",  "#FFE66D"
+ 
         col.markdown(f"""
         <div class='hcard'>
             <div class='hcard-title'>{bucket}</div>
-            <div class='hcard-sub'>Ideal {i}% · Actual {a:.1f}%</div>
+            <div class='hcard-sub'>Ideal {i}% ({ideal_amt}) · Actual {a:.1f}%</div>
             <div class='hcard-status' style='color:{clr};'>{status}</div>
         </div>""", unsafe_allow_html=True)
-
+ 
     hcard(h1, "Needs")
     hcard(h2, "Wants")
     hcard(h3, "Savings")
